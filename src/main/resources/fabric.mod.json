@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "mctinytask",
+  "version": "${version}",
+  "name": "MC TinyTask",
+  "description": "Client-side macro recorder with commands for Minecraft 1.21.4",
+  "authors": ["You"],
+  "contact": {},
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.example.tinytask.TinyTaskMod"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.4",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
