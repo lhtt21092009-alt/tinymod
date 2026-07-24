@@ -1,22 +1,70 @@
 {
   "schemaVersion": 1,
-  "id": "mctinytask",
-  "version": "${version}",
-  "name": "MC TinyTask",
-  "description": "Client-side macro recorder with commands for Minecraft 1.21.4",
-  "authors": ["You"],
-  "contact": {},
+  "id": "example_mod",
+  "version": "1.0.0",
+  "name": "Example Mod",
+  "description": "A comprehensive example description of what this mod does.",
+  "authors": [
+    "Your Name",
+    {
+      "name": "Contributor Name",
+      "contact": {
+        "email": "contributor@example.com"
+      }
+    }
+  ],
+  "contact": {
+    "homepage": "https://example.com/",
+    "sources": "https://github.com/username/example_mod",
+    "issues": "https://github.com/username/example_mod/issues",
+    "discord": "https://discord.gg/example"
+  },
   "license": "MIT",
-  "environment": "client",
+  "icon": "assets/example_mod/icon.png",
+  "environment": "*",
   "entrypoints": {
+    "main": [
+      "com.example.mod.ExampleMod"
+    ],
     "client": [
-      "com.example.tinytask.TinyTaskMod"
+      "com.example.mod.client.ExampleModClient"
+    ],
+    "server": [
+      "com.example.mod.server.ExampleModServer"
+    ],
+    "fabric-datagen": [
+      "com.example.mod.data.ExampleDataGenerator"
+    ],
+    "modmenu": [
+      "com.example.mod.compat.ModMenuApiImpl"
     ]
   },
+  "mixins": [
+    "example_mod.mixins.json",
+    {
+      "config": "example_mod.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "accessWidener": "example_mod.accesswidener",
   "depends": {
-    "fabricloader": ">=0.16.0",
-    "minecraft": "~1.21.4",
-    "java": ">=21",
+    "fabricloader": ">=0.15.0",
+    "minecraft": "~1.20.4",
+    "java": ">=17",
     "fabric-api": "*"
+  },
+  "recommends": {
+    "modmenu": "*"
+  },
+  "suggests": {
+    "sodium": "*"
+  },
+  "breaks": {
+    "incompatible_mod": "*"
+  },
+  "custom": {
+    "modmenu": {
+      "badges": ["library"]
+    }
   }
 }

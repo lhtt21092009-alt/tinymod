@@ -1,5 +1,6 @@
 package com.example.tinytask;
 
+import com.example.tinytask.mixin.MinecraftClientAccessor;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.text.Text;
@@ -119,8 +120,8 @@ public class MacroManager {
                 client.options.rightKey.isPressed(),
                 client.options.jumpKey.isPressed(),
                 client.options.sneakKey.isPressed(),
-                client.options.attackKey.isPressed(), // Ghi nhận chuột trái
-                client.options.useKey.isPressed()     // Ghi nhận chuột phải
+                client.options.attackKey.isPressed(),
+                client.options.useKey.isPressed()
             );
             recordedTicks.add(record);
         } 
@@ -138,7 +139,7 @@ public class MacroManager {
 
             InputRecord record = recordedTicks.get(playbackIndex++);
 
-            // Set trạng thái các phím di chuyển
+            // Set phím di chuyển
             client.options.forwardKey.setPressed(record.pressingForward);
             client.options.backKey.setPressed(record.pressingBack);
             client.options.leftKey.setPressed(record.pressingLeft);
@@ -146,16 +147,16 @@ public class MacroManager {
             client.options.jumpKey.setPressed(record.jumping);
             client.options.sneakKey.setPressed(record.sneaking);
 
-            // FIX CHUỘT TRÁI (ATTACK / BREAK)
+            // FIX CHUỘT TRÁI QUA ACCESSOR MIXIN
             client.options.attackKey.setPressed(record.attacking);
             if (record.attacking) {
                 KeyBinding.onKeyPressed(client.options.attackKey.getDefaultKey());
                 if (client.interactionManager != null && client.crosshairTarget != null) {
-                    client.handleBlockBreaking(true); // Đảm bảo đập/đánh liên tục chuẩn tick
+                    ((MinecraftClientAccessor) client).invokeHandleBlockBreaking(true);
                 }
             }
 
-            // FIX CHUỘT PHẢI (USE / PLACE)
+            // FIX CHUỘT PHẢI
             client.options.useKey.setPressed(record.usingItem);
             if (record.usingItem) {
                 KeyBinding.onKeyPressed(client.options.useKey.getDefaultKey());
