@@ -1,7 +1,6 @@
 package com.example.tinytask;
 
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.text.Text;
 
 import java.io.*;
@@ -9,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class MacroManager {
@@ -31,6 +31,20 @@ public class MacroManager {
         }
     }
 
+    // Lấy danh sách các file macro để gợi ý khi bấm Tab
+    public List<String> getSavedMacroFiles() {
+        File folder = macroDir.toFile();
+        File[] files = folder.listFiles((dir, name) -> name.endsWith(".txt"));
+        if (files == null) return Collections.emptyList();
+
+        List<String> fileNames = new ArrayList<>();
+        for (File f : files) {
+            String name = f.getName();
+            fileNames.add(name.substring(0, name.length() - 4)); // Bỏ đuôi .txt
+        }
+        return fileNames;
+    }
+
     public void startRecording(MinecraftClient client, String fileName) {
         if (state == State.PLAYING) {
             sendMessage(client, "§c[TinyTask] Đang phát lại macro, gõ \\stop trước!");
@@ -39,7 +53,7 @@ public class MacroManager {
         this.currentFileName = fileName;
         recordedTicks.clear();
         state = State.RECORDING;
-        sendMessage(client, "§a[TinyTask] Bắt đầu GHI (chỉ phím) vào file: " + fileName);
+        sendMessage(client, "§a[TinyTask] Bắt đầu GHI (phím + chuột trái/phải) vào: " + fileName);
     }
 
     public void startPlaying(MinecraftClient client, String fileName, boolean loopForever) {
@@ -98,7 +112,7 @@ public class MacroManager {
         if (client.player == null) return;
 
         if (state == State.RECORDING) {
-            // CHỈ GHI TRẠNG THÁI PHÍM - BỎ GÓC NHÌN CHUỘT (YAW / PITCH)
+            // GHI PHÍM VÀ CHUỘT TRÁI (attackKey) / CHUỘT PHẢI (useKey) - KHÔNG GHI GÓC QUAY CAMERA
             InputRecord record = new InputRecord(
                 client.options.forwardKey.isPressed(),
                 client.options.backKey.isPressed(),
@@ -106,8 +120,8 @@ public class MacroManager {
                 client.options.rightKey.isPressed(),
                 client.options.jumpKey.isPressed(),
                 client.options.sneakKey.isPressed(),
-                client.options.attackKey.isPressed(),
-                client.options.useKey.isPressed()
+                client.options.attackKey.isPressed(), // Chuột trái
+                client.options.useKey.isPressed()     // Chuột phải
             );
             recordedTicks.add(record);
         } 
@@ -125,7 +139,7 @@ public class MacroManager {
 
             InputRecord record = recordedTicks.get(playbackIndex++);
 
-            // CHỈ PHÁT LẠI PHÍM - MÀN HÌNH TỰ DO XOAY
+            // PHÁT LẠI TRẠNG THÁI BẤM CHUỘT TRÁI/PHẢI & PHÍM (TỰ DO QUAY MÀN HÌNH)
             client.options.forwardKey.setPressed(record.pressingForward);
             client.options.backKey.setPressed(record.pressingBack);
             client.options.leftKey.setPressed(record.pressingLeft);

@@ -5,6 +5,7 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import net.minecraft.command.CommandSource;
 
 public class TinyTaskMod implements ClientModInitializer {
     public static final MacroManager macroManager = new MacroManager();
@@ -24,9 +25,10 @@ public class TinyTaskMod implements ClientModInitializer {
                 )
             );
 
-            // \start <filename> [inf]
+            // \start <filename> [inf] (CÓ GỢI Ý TAB)
             dispatcher.register(ClientCommandManager.literal("start")
                 .then(ClientCommandManager.argument("filename", StringArgumentType.word())
+                    .suggests((context, builder) -> CommandSource.suggestMatching(macroManager.getSavedMacroFiles(), builder))
                     .executes(context -> {
                         String filename = StringArgumentType.getString(context, "filename");
                         macroManager.startPlaying(context.getSource().getClient(), filename, false);
@@ -42,9 +44,10 @@ public class TinyTaskMod implements ClientModInitializer {
                 )
             );
 
-            // \del <filename> (LỆNH MỚI)
+            // \del <filename> (CÓ GỢI Ý TAB)
             dispatcher.register(ClientCommandManager.literal("del")
                 .then(ClientCommandManager.argument("filename", StringArgumentType.word())
+                    .suggests((context, builder) -> CommandSource.suggestMatching(macroManager.getSavedMacroFiles(), builder))
                     .executes(context -> {
                         String filename = StringArgumentType.getString(context, "filename");
                         macroManager.deleteMacroFile(context.getSource().getClient(), filename);

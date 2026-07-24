@@ -7,8 +7,8 @@ public class InputRecord {
     public boolean pressingRight;
     public boolean jumping;
     public boolean sneaking;
-    public boolean attacking;
-    public boolean usingItem;
+    public boolean attacking; // Chuột trái (Attack / Break)
+    public boolean usingItem;  // Chuột phải (Use / Place)
 
     public InputRecord(boolean forward, boolean back, boolean left, boolean right, 
                        boolean jumping, boolean sneaking, boolean attacking, boolean usingItem) {
