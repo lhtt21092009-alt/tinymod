@@ -1,6 +1,7 @@
 package com.example.tinytask;
 
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.option.KeyBinding;
 import net.minecraft.text.Text;
 
 import java.io.*;
@@ -31,7 +32,6 @@ public class MacroManager {
         }
     }
 
-    // Lấy danh sách các file macro để gợi ý khi bấm Tab
     public List<String> getSavedMacroFiles() {
         File folder = macroDir.toFile();
         File[] files = folder.listFiles((dir, name) -> name.endsWith(".txt"));
@@ -40,7 +40,7 @@ public class MacroManager {
         List<String> fileNames = new ArrayList<>();
         for (File f : files) {
             String name = f.getName();
-            fileNames.add(name.substring(0, name.length() - 4)); // Bỏ đuôi .txt
+            fileNames.add(name.substring(0, name.length() - 4));
         }
         return fileNames;
     }
@@ -53,7 +53,7 @@ public class MacroManager {
         this.currentFileName = fileName;
         recordedTicks.clear();
         state = State.RECORDING;
-        sendMessage(client, "§a[TinyTask] Bắt đầu GHI (phím + chuột trái/phải) vào: " + fileName);
+        sendMessage(client, "§a[TinyTask] Bắt đầu GHI vào file: " + fileName);
     }
 
     public void startPlaying(MinecraftClient client, String fileName, boolean loopForever) {
@@ -112,7 +112,6 @@ public class MacroManager {
         if (client.player == null) return;
 
         if (state == State.RECORDING) {
-            // GHI PHÍM VÀ CHUỘT TRÁI (attackKey) / CHUỘT PHẢI (useKey) - KHÔNG GHI GÓC QUAY CAMERA
             InputRecord record = new InputRecord(
                 client.options.forwardKey.isPressed(),
                 client.options.backKey.isPressed(),
@@ -120,8 +119,8 @@ public class MacroManager {
                 client.options.rightKey.isPressed(),
                 client.options.jumpKey.isPressed(),
                 client.options.sneakKey.isPressed(),
-                client.options.attackKey.isPressed(), // Chuột trái
-                client.options.useKey.isPressed()     // Chuột phải
+                client.options.attackKey.isPressed(), // Ghi nhận chuột trái
+                client.options.useKey.isPressed()     // Ghi nhận chuột phải
             );
             recordedTicks.add(record);
         } 
@@ -139,15 +138,28 @@ public class MacroManager {
 
             InputRecord record = recordedTicks.get(playbackIndex++);
 
-            // PHÁT LẠI TRẠNG THÁI BẤM CHUỘT TRÁI/PHẢI & PHÍM (TỰ DO QUAY MÀN HÌNH)
+            // Set trạng thái các phím di chuyển
             client.options.forwardKey.setPressed(record.pressingForward);
             client.options.backKey.setPressed(record.pressingBack);
             client.options.leftKey.setPressed(record.pressingLeft);
             client.options.rightKey.setPressed(record.pressingRight);
             client.options.jumpKey.setPressed(record.jumping);
             client.options.sneakKey.setPressed(record.sneaking);
+
+            // FIX CHUỘT TRÁI (ATTACK / BREAK)
             client.options.attackKey.setPressed(record.attacking);
+            if (record.attacking) {
+                KeyBinding.onKeyPressed(client.options.attackKey.getDefaultKey());
+                if (client.interactionManager != null && client.crosshairTarget != null) {
+                    client.handleBlockBreaking(true); // Đảm bảo đập/đánh liên tục chuẩn tick
+                }
+            }
+
+            // FIX CHUỘT PHẢI (USE / PLACE)
             client.options.useKey.setPressed(record.usingItem);
+            if (record.usingItem) {
+                KeyBinding.onKeyPressed(client.options.useKey.getDefaultKey());
+            }
         }
     }
 
