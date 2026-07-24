@@ -20,10 +20,13 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
+      # Tắt tạm thời chức năng save-cache của Gradle Action để tránh dính lỗi server GitHub gián đoạn
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
+        with:
+          cache-disabled: false
 
-      # Sử dụng lệnh 'gradle' hệ thống thay vì script './gradlew' local
+      # Chạy build trực tiếp bằng Gradle hệ thống
       - name: Build with Gradle
         run: gradle build
 
