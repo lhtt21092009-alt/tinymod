@@ -11,7 +11,6 @@ public class TinyTaskMod implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        // Đăng ký lệnh Client Command
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             
             // \record <filename>
@@ -43,6 +42,17 @@ public class TinyTaskMod implements ClientModInitializer {
                 )
             );
 
+            // \del <filename> (LỆNH MỚI)
+            dispatcher.register(ClientCommandManager.literal("del")
+                .then(ClientCommandManager.argument("filename", StringArgumentType.word())
+                    .executes(context -> {
+                        String filename = StringArgumentType.getString(context, "filename");
+                        macroManager.deleteMacroFile(context.getSource().getClient(), filename);
+                        return 1;
+                    })
+                )
+            );
+
             // \stop
             dispatcher.register(ClientCommandManager.literal("stop")
                 .executes(context -> {
@@ -52,7 +62,6 @@ public class TinyTaskMod implements ClientModInitializer {
             );
         });
 
-        // Tick loop
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             macroManager.onTick(client);
         });

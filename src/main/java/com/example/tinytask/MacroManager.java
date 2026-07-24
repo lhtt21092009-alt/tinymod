@@ -39,7 +39,7 @@ public class MacroManager {
         this.currentFileName = fileName;
         recordedTicks.clear();
         state = State.RECORDING;
-        sendMessage(client, "§a[TinyTask] Bắt đầu GHI vào file: " + fileName);
+        sendMessage(client, "§a[TinyTask] Bắt đầu GHI (chỉ phím) vào file: " + fileName);
     }
 
     public void startPlaying(MinecraftClient client, String fileName, boolean loopForever) {
@@ -66,6 +66,20 @@ public class MacroManager {
         sendMessage(client, "§a[TinyTask] Đang PHÁT file: " + fileName + (loopForever ? " (Chạy vô hạn)" : " (Chạy 1 lần)"));
     }
 
+    public void deleteMacroFile(MinecraftClient client, String fileName) {
+        File file = macroDir.resolve(fileName + ".txt").toFile();
+        if (!file.exists()) {
+            sendMessage(client, "§c[TinyTask] Không tìm thấy file để xóa: " + fileName + ".txt");
+            return;
+        }
+
+        if (file.delete()) {
+            sendMessage(client, "§a[TinyTask] Đã xóa thành công file: " + fileName + ".txt");
+        } else {
+            sendMessage(client, "§c[TinyTask] Không thể xóa file: " + fileName + ".txt");
+        }
+    }
+
     public void stopAll(MinecraftClient client) {
         if (state == State.RECORDING) {
             saveMacroToFile();
@@ -82,11 +96,10 @@ public class MacroManager {
 
     public void onTick(MinecraftClient client) {
         if (client.player == null) return;
-        ClientPlayerEntity player = client.player;
 
         if (state == State.RECORDING) {
+            // CHỈ GHI TRẠNG THÁI PHÍM - BỎ GÓC NHÌN CHUỘT (YAW / PITCH)
             InputRecord record = new InputRecord(
-                player.getYaw(), player.getPitch(),
                 client.options.forwardKey.isPressed(),
                 client.options.backKey.isPressed(),
                 client.options.leftKey.isPressed(),
@@ -111,9 +124,8 @@ public class MacroManager {
             }
 
             InputRecord record = recordedTicks.get(playbackIndex++);
-            player.setYaw(record.yaw);
-            player.setPitch(record.pitch);
 
+            // CHỈ PHÁT LẠI PHÍM - MÀN HÌNH TỰ DO XOAY
             client.options.forwardKey.setPressed(record.pressingForward);
             client.options.backKey.setPressed(record.pressingBack);
             client.options.leftKey.setPressed(record.pressingLeft);
@@ -141,9 +153,9 @@ public class MacroManager {
         File file = macroDir.resolve(currentFileName + ".txt").toFile();
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(file))) {
             for (InputRecord r : recordedTicks) {
-                writer.write(String.format("%f,%f,%b,%b,%b,%b,%b,%b,%b,%b\n",
-                    r.yaw, r.pitch, r.pressingForward, r.pressingBack, 
-                    r.pressingLeft, r.pressingRight, r.jumping, r.sneaking, r.attacking, r.usingItem));
+                writer.write(String.format("%b,%b,%b,%b,%b,%b,%b,%b\n",
+                    r.pressingForward, r.pressingBack, r.pressingLeft, r.pressingRight, 
+                    r.jumping, r.sneaking, r.attacking, r.usingItem));
             }
         } catch (IOException e) {
             e.printStackTrace();
@@ -156,13 +168,12 @@ public class MacroManager {
             String line;
             while ((line = reader.readLine()) != null) {
                 String[] parts = line.split(",");
-                if (parts.length == 10) {
+                if (parts.length == 8) {
                     InputRecord r = new InputRecord(
-                        Float.parseFloat(parts[0]), Float.parseFloat(parts[1]),
+                        Boolean.parseBoolean(parts[0]), Boolean.parseBoolean(parts[1]),
                         Boolean.parseBoolean(parts[2]), Boolean.parseBoolean(parts[3]),
                         Boolean.parseBoolean(parts[4]), Boolean.parseBoolean(parts[5]),
-                        Boolean.parseBoolean(parts[6]), Boolean.parseBoolean(parts[7]),
-                        Boolean.parseBoolean(parts[8]), Boolean.parseBoolean(parts[9])
+                        Boolean.parseBoolean(parts[6]), Boolean.parseBoolean(parts[7])
                     );
                     recordedTicks.add(r);
                 }
