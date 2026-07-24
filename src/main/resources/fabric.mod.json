@@ -1,70 +1,28 @@
 {
   "schemaVersion": 1,
-  "id": "example_mod",
+  "id": "mctinytask",
   "version": "1.0.0",
-  "name": "Example Mod",
-  "description": "A comprehensive example description of what this mod does.",
+  "name": "MC TinyTask",
+  "description": "Macro recorder mod for Minecraft",
   "authors": [
-    "Your Name",
-    {
-      "name": "Contributor Name",
-      "contact": {
-        "email": "contributor@example.com"
-      }
-    }
+    "YourName"
   ],
-  "contact": {
-    "homepage": "https://example.com/",
-    "sources": "https://github.com/username/example_mod",
-    "issues": "https://github.com/username/example_mod/issues",
-    "discord": "https://discord.gg/example"
-  },
+  "contact": {},
   "license": "MIT",
-  "icon": "assets/example_mod/icon.png",
+  "icon": "assets/mctinytask/icon.png",
   "environment": "*",
   "entrypoints": {
-    "main": [
-      "com.example.mod.ExampleMod"
-    ],
     "client": [
-      "com.example.mod.client.ExampleModClient"
-    ],
-    "server": [
-      "com.example.mod.server.ExampleModServer"
-    ],
-    "fabric-datagen": [
-      "com.example.mod.data.ExampleDataGenerator"
-    ],
-    "modmenu": [
-      "com.example.mod.compat.ModMenuApiImpl"
+      "com.example.tinytask.TinyTaskMod"
     ]
   },
   "mixins": [
-    "example_mod.mixins.json",
-    {
-      "config": "example_mod.client.mixins.json",
-      "environment": "client"
-    }
+    "mctinytask.mixins.json"
   ],
-  "accessWidener": "example_mod.accesswidener",
   "depends": {
     "fabricloader": ">=0.15.0",
-    "minecraft": "~1.20.4",
-    "java": ">=17",
+    "minecraft": "~1.21.4",
+    "java": ">=21",
     "fabric-api": "*"
-  },
-  "recommends": {
-    "modmenu": "*"
-  },
-  "suggests": {
-    "sodium": "*"
-  },
-  "breaks": {
-    "incompatible_mod": "*"
-  },
-  "custom": {
-    "modmenu": {
-      "badges": ["library"]
-    }
   }
 }
