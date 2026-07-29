@@ -113,6 +113,11 @@ public class MacroManager {
         if (client.player == null) return;
 
         if (state == State.RECORDING) {
+            boolean[] hotbar = new boolean[InputRecord.HOTBAR_SLOTS];
+            for (int i = 0; i < InputRecord.HOTBAR_SLOTS; i++) {
+                hotbar[i] = client.options.hotbarKeys[i].isPressed();
+            }
+
             InputRecord record = new InputRecord(
                 client.options.forwardKey.isPressed(),
                 client.options.backKey.isPressed(),
@@ -121,7 +126,8 @@ public class MacroManager {
                 client.options.jumpKey.isPressed(),
                 client.options.sneakKey.isPressed(),
                 client.options.attackKey.isPressed(),
-                client.options.useKey.isPressed()
+                client.options.useKey.isPressed(),
+                hotbar
             );
             recordedTicks.add(record);
         } 
@@ -161,6 +167,15 @@ public class MacroManager {
             if (record.usingItem) {
                 KeyBinding.onKeyPressed(client.options.useKey.getDefaultKey());
             }
+
+            // FIX PHÍM SỐ 1..9 (chuyển ô hotbar)
+            for (int i = 0; i < InputRecord.HOTBAR_SLOTS; i++) {
+                boolean pressed = record.hotbarKeys[i];
+                client.options.hotbarKeys[i].setPressed(pressed);
+                if (pressed) {
+                    KeyBinding.onKeyPressed(client.options.hotbarKeys[i].getDefaultKey());
+                }
+            }
         }
     }
 
@@ -174,15 +189,24 @@ public class MacroManager {
         client.options.sneakKey.setPressed(false);
         client.options.attackKey.setPressed(false);
         client.options.useKey.setPressed(false);
+        for (int i = 0; i < InputRecord.HOTBAR_SLOTS; i++) {
+            client.options.hotbarKeys[i].setPressed(false);
+        }
     }
 
     private void saveMacroToFile() {
         File file = macroDir.resolve(currentFileName + ".txt").toFile();
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(file))) {
             for (InputRecord r : recordedTicks) {
-                writer.write(String.format("%b,%b,%b,%b,%b,%b,%b,%b\n",
-                    r.pressingForward, r.pressingBack, r.pressingLeft, r.pressingRight, 
+                StringBuilder sb = new StringBuilder();
+                sb.append(String.format("%b,%b,%b,%b,%b,%b,%b,%b",
+                    r.pressingForward, r.pressingBack, r.pressingLeft, r.pressingRight,
                     r.jumping, r.sneaking, r.attacking, r.usingItem));
+                for (int i = 0; i < InputRecord.HOTBAR_SLOTS; i++) {
+                    sb.append(",").append(r.hotbarKeys[i]);
+                }
+                sb.append("\n");
+                writer.write(sb.toString());
             }
         } catch (IOException e) {
             e.printStackTrace();
@@ -195,12 +219,21 @@ public class MacroManager {
             String line;
             while ((line = reader.readLine()) != null) {
                 String[] parts = line.split(",");
-                if (parts.length == 8) {
+                int expected = 8 + InputRecord.HOTBAR_SLOTS;
+                if (parts.length == expected || parts.length == 8) {
+                    boolean[] hotbar = new boolean[InputRecord.HOTBAR_SLOTS];
+                    if (parts.length == expected) {
+                        for (int i = 0; i < InputRecord.HOTBAR_SLOTS; i++) {
+                            hotbar[i] = Boolean.parseBoolean(parts[8 + i]);
+                        }
+                    } // file macro cũ (8 cột) không có dữ liệu hotbar -> mặc định false
+
                     InputRecord r = new InputRecord(
                         Boolean.parseBoolean(parts[0]), Boolean.parseBoolean(parts[1]),
                         Boolean.parseBoolean(parts[2]), Boolean.parseBoolean(parts[3]),
                         Boolean.parseBoolean(parts[4]), Boolean.parseBoolean(parts[5]),
-                        Boolean.parseBoolean(parts[6]), Boolean.parseBoolean(parts[7])
+                        Boolean.parseBoolean(parts[6]), Boolean.parseBoolean(parts[7]),
+                        hotbar
                     );
                     recordedTicks.add(r);
                 }
