@@ -4,6 +4,7 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import net.minecraft.command.CommandSource;
 
@@ -67,6 +68,13 @@ public class TinyTaskMod implements ClientModInitializer {
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             macroManager.onTick(client);
+        });
+
+        // FIX: nếu người chơi thoát world/server (kể cả do rớt mạng) trong lúc đang GHI hoặc PHÁT macro,
+        // phải buộc dừng + nhả hết phím đang bị giữ. Nếu không, khi vào lại thế giới khác, mod sẽ tiếp tục
+        // ghi/phát lẫn sang phiên chơi mới, hoặc để phím bị "kẹt" ở màn hình chính (title screen).
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+            macroManager.stopAll(client);
         });
     }
 }

@@ -1,20 +1,25 @@
 package com.example.tinytask;
 
 import com.example.tinytask.mixin.MinecraftClientAccessor;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.text.Text;
 
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.regex.Pattern;
 
 public class MacroManager {
     public enum State { IDLE, RECORDING, PLAYING }
+
+    // Chỉ cho phép chữ/số/gạch dưới/gạch ngang trong tên file macro (chặn tên rỗng, ký tự lạ, path traversal)
+    private static final Pattern SAFE_FILENAME = Pattern.compile("^[a-zA-Z0-9_-]{1,64}$");
 
     private State state = State.IDLE;
     private final List<InputRecord> recordedTicks = new ArrayList<>();
@@ -25,7 +30,9 @@ public class MacroManager {
     private final Path macroDir;
 
     public MacroManager() {
-        macroDir = Paths.get("config", "mctinytask");
+        // Dùng thư mục config chuẩn của Fabric (an toàn hơn Paths.get("config",...) 
+        // vì không phụ thuộc vào working directory lúc chạy game)
+        macroDir = FabricLoader.getInstance().getConfigDir().resolve("mctinytask");
         try {
             Files.createDirectories(macroDir);
         } catch (IOException e) {
@@ -51,6 +58,14 @@ public class MacroManager {
             sendMessage(client, "§c[TinyTask] Đang phát lại macro, gõ \\stop trước!");
             return;
         }
+        if (state == State.RECORDING) {
+            sendMessage(client, "§c[TinyTask] Đang ghi dở file \"" + currentFileName + "\", gõ \\stop trước để lưu rồi mới ghi file mới!");
+            return;
+        }
+        if (!SAFE_FILENAME.matcher(fileName).matches()) {
+            sendMessage(client, "§c[TinyTask] Tên file không hợp lệ! Chỉ dùng chữ, số, _ , - (tối đa 64 ký tự).");
+            return;
+        }
         this.currentFileName = fileName;
         recordedTicks.clear();
         state = State.RECORDING;
@@ -62,6 +77,14 @@ public class MacroManager {
             sendMessage(client, "§c[TinyTask] Đang ghi thao tác, gõ \\stop trước!");
             return;
         }
+        if (state == State.PLAYING) {
+            sendMessage(client, "§c[TinyTask] Đang phát macro khác, gõ \\stop trước rồi hãy \\start lại!");
+            return;
+        }
+        if (!SAFE_FILENAME.matcher(fileName).matches()) {
+            sendMessage(client, "§c[TinyTask] Tên file không hợp lệ!");
+            return;
+        }
 
         File file = macroDir.resolve(fileName + ".txt").toFile();
         if (!file.exists()) {
@@ -69,7 +92,11 @@ public class MacroManager {
             return;
         }
 
-        loadMacroFromFile(file);
+        boolean loaded = loadMacroFromFile(file);
+        if (!loaded) {
+            sendMessage(client, "§c[TinyTask] Lỗi khi đọc file macro: " + fileName + ".txt");
+            return;
+        }
         if (recordedTicks.isEmpty()) {
             sendMessage(client, "§e[TinyTask] File rỗng hoặc không đúng định dạng!");
             return;
@@ -82,6 +109,11 @@ public class MacroManager {
     }
 
     public void deleteMacroFile(MinecraftClient client, String fileName) {
+        if (!SAFE_FILENAME.matcher(fileName).matches()) {
+            sendMessage(client, "§c[TinyTask] Tên file không hợp lệ!");
+            return;
+        }
+
         File file = macroDir.resolve(fileName + ".txt").toFile();
         if (!file.exists()) {
             sendMessage(client, "§c[TinyTask] Không tìm thấy file để xóa: " + fileName + ".txt");
@@ -97,9 +129,13 @@ public class MacroManager {
 
     public void stopAll(MinecraftClient client) {
         if (state == State.RECORDING) {
-            saveMacroToFile();
+            boolean saved = saveMacroToFile();
             state = State.IDLE;
-            sendMessage(client, "§a[TinyTask] Đã DỪNG ghi và LƯU: " + currentFileName + ".txt (" + recordedTicks.size() + " ticks)");
+            if (saved) {
+                sendMessage(client, "§a[TinyTask] Đã DỪNG ghi và LƯU: " + currentFileName + ".txt (" + recordedTicks.size() + " ticks)");
+            } else {
+                sendMessage(client, "§c[TinyTask] Đã DỪNG ghi nhưng LƯU FILE THẤT BẠI: " + currentFileName + ".txt");
+            }
         } else if (state == State.PLAYING) {
             state = State.IDLE;
             resetPlayerInputs(client);
@@ -110,11 +146,12 @@ public class MacroManager {
     }
 
     public void onTick(MinecraftClient client) {
-        if (client.player == null) return;
+        if (client.player == null || client.options == null) return;
 
         if (state == State.RECORDING) {
+            int hotbarCount = Math.min(InputRecord.HOTBAR_SLOTS, client.options.hotbarKeys.length);
             boolean[] hotbar = new boolean[InputRecord.HOTBAR_SLOTS];
-            for (int i = 0; i < InputRecord.HOTBAR_SLOTS; i++) {
+            for (int i = 0; i < hotbarCount; i++) {
                 hotbar[i] = client.options.hotbarKeys[i].isPressed();
             }
 
@@ -157,9 +194,11 @@ public class MacroManager {
             client.options.attackKey.setPressed(record.attacking);
             if (record.attacking) {
                 KeyBinding.onKeyPressed(client.options.attackKey.getDefaultKey());
-                if (client.interactionManager != null && client.crosshairTarget != null) {
-                    ((MinecraftClientAccessor) client).invokeHandleBlockBreaking(true);
-                }
+            }
+            // Luôn báo trạng thái true/false cho từng tick, không chỉ khi true,
+            // nếu không thanh tiến trình đào block sẽ bị "kẹt" khi nhả chuột giữa chừng.
+            if (client.interactionManager != null) {
+                ((MinecraftClientAccessor) client).invokeHandleBlockBreaking(record.attacking && client.crosshairTarget != null);
             }
 
             // FIX CHUỘT PHẢI
@@ -169,7 +208,8 @@ public class MacroManager {
             }
 
             // FIX PHÍM SỐ 1..9 (chuyển ô hotbar)
-            for (int i = 0; i < InputRecord.HOTBAR_SLOTS; i++) {
+            int hotbarCount = Math.min(InputRecord.HOTBAR_SLOTS, client.options.hotbarKeys.length);
+            for (int i = 0; i < hotbarCount; i++) {
                 boolean pressed = record.hotbarKeys[i];
                 client.options.hotbarKeys[i].setPressed(pressed);
                 if (pressed) {
@@ -189,14 +229,19 @@ public class MacroManager {
         client.options.sneakKey.setPressed(false);
         client.options.attackKey.setPressed(false);
         client.options.useKey.setPressed(false);
-        for (int i = 0; i < InputRecord.HOTBAR_SLOTS; i++) {
+        if (client.interactionManager != null) {
+            ((MinecraftClientAccessor) client).invokeHandleBlockBreaking(false);
+        }
+        int hotbarCount = Math.min(InputRecord.HOTBAR_SLOTS, client.options.hotbarKeys.length);
+        for (int i = 0; i < hotbarCount; i++) {
             client.options.hotbarKeys[i].setPressed(false);
         }
     }
 
-    private void saveMacroToFile() {
+    private boolean saveMacroToFile() {
         File file = macroDir.resolve(currentFileName + ".txt").toFile();
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(file))) {
+        try (BufferedWriter writer = new BufferedWriter(
+                new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8))) {
             for (InputRecord r : recordedTicks) {
                 StringBuilder sb = new StringBuilder();
                 sb.append(String.format("%b,%b,%b,%b,%b,%b,%b,%b",
@@ -208,14 +253,17 @@ public class MacroManager {
                 sb.append("\n");
                 writer.write(sb.toString());
             }
+            return true;
         } catch (IOException e) {
             e.printStackTrace();
+            return false;
         }
     }
 
-    private void loadMacroFromFile(File file) {
-        recordedTicks.clear();
-        try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+    private boolean loadMacroFromFile(File file) {
+        List<InputRecord> loaded = new ArrayList<>();
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 String[] parts = line.split(",");
@@ -235,12 +283,17 @@ public class MacroManager {
                         Boolean.parseBoolean(parts[6]), Boolean.parseBoolean(parts[7]),
                         hotbar
                     );
-                    recordedTicks.add(r);
+                    loaded.add(r);
                 }
+                // dòng sai định dạng: bỏ qua, không làm hỏng toàn bộ macro
             }
         } catch (IOException e) {
             e.printStackTrace();
+            return false;
         }
+        recordedTicks.clear();
+        recordedTicks.addAll(loaded);
+        return true;
     }
 
     private void sendMessage(MinecraftClient client, String text) {
