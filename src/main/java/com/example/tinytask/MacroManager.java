@@ -11,11 +11,7 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.regex.Pattern;
 
 public class MacroManager {
@@ -25,16 +21,19 @@ public class MacroManager {
     private static final Pattern SAFE_FILENAME = Pattern.compile("^[a-zA-Z0-9_-]{1,64}$");
 
     private State state = State.IDLE;
-    private final List<InputRecord> recordedTicks = new ArrayList<>();
-    private int playbackIndex = 0;
-    private boolean loop = false;
-
-    // Tập hợp các phím (translation key) đang được coi là "đang giữ" ở tick TRƯỚC ĐÓ lúc phát lại.
-    // Dùng để chỉ bắn sự kiện "vừa bấm xuống" (rising edge) đúng 1 lần, không lặp lại mỗi tick khi giữ.
-    private Set<String> prevPressedKeys = new HashSet<>();
-
     private String currentFileName = "default";
     private final Path macroDir;
+
+    // Dữ liệu macro: mỗi phần tử là 1 TICK, chứa tên (translation key) các phím ĐANG được giữ ở tick đó.
+    // VD tick đó có W và phím "1" đang giữ -> {"key.forward", "key.hotbar.1"}.
+    // Không có nút nào giữ -> tập rỗng (ghi ra file là 1 dòng trống).
+    private final List<Set<String>> tickData = new ArrayList<>();
+
+    // ===== Trạng thái khi đang PHÁT =====
+    private int playTick = 0;
+    private boolean loop = false;
+    private Set<String> prevPlayKeys = new HashSet<>();
+    private Map<String, KeyBinding> keyBindingByName = new HashMap<>();
 
     public MacroManager() {
         // Dùng thư mục config chuẩn của Fabric (an toàn hơn Paths.get("config",...)
@@ -74,7 +73,7 @@ public class MacroManager {
             return;
         }
         this.currentFileName = fileName;
-        recordedTicks.clear();
+        tickData.clear();
         state = State.RECORDING;
         sendMessage(client, "§a[TinyTask] Bắt đầu GHI vào file: " + fileName);
     }
@@ -104,16 +103,23 @@ public class MacroManager {
             sendMessage(client, "§c[TinyTask] Lỗi khi đọc file macro: " + fileName + ".txt");
             return;
         }
-        if (recordedTicks.isEmpty()) {
-            sendMessage(client, "§e[TinyTask] File rỗng hoặc không đúng định dạng!");
+        if (tickData.isEmpty()) {
+            sendMessage(client, "§e[TinyTask] File rỗng!");
             return;
         }
 
+        // Cache map tên phím -> KeyBinding một lần cho cả phiên phát
+        keyBindingByName = new HashMap<>();
+        for (KeyBinding kb : client.options.allKeys) {
+            if (kb != null) keyBindingByName.put(kb.getTranslationKey(), kb);
+        }
+
+        this.playTick = 0;
+        this.prevPlayKeys = new HashSet<>();
         this.loop = loopForever;
-        this.playbackIndex = 0;
-        this.prevPressedKeys = new HashSet<>();
         this.state = State.PLAYING;
-        sendMessage(client, "§a[TinyTask] Đang PHÁT file: " + fileName + (loopForever ? " (Chạy vô hạn)" : " (Chạy 1 lần)"));
+        sendMessage(client, "§a[TinyTask] Đang PHÁT file: " + fileName + " (" + tickData.size() + " tick)"
+            + (loopForever ? " - Chạy vô hạn" : " - Chạy 1 lần"));
     }
 
     public void deleteMacroFile(MinecraftClient client, String fileName) {
@@ -140,7 +146,7 @@ public class MacroManager {
             boolean saved = saveMacroToFile();
             state = State.IDLE;
             if (saved) {
-                sendMessage(client, "§a[TinyTask] Đã DỪNG ghi và LƯU: " + currentFileName + ".txt (" + recordedTicks.size() + " ticks)");
+                sendMessage(client, "§a[TinyTask] Đã DỪNG ghi và LƯU: " + currentFileName + ".txt (" + tickData.size() + " tick)");
             } else {
                 sendMessage(client, "§c[TinyTask] Đã DỪNG ghi nhưng LƯU FILE THẤT BẠI: " + currentFileName + ".txt");
             }
@@ -157,30 +163,19 @@ public class MacroManager {
         if (client.player == null || client.options == null) return;
 
         if (state == State.RECORDING) {
-            List<String> pressed = new ArrayList<>();
+            // Chụp lại TÊN của mọi phím đang giữ ở tick này - phím vừa nhấn sẽ xuất hiện NGAY LẬP TỨC
+            // trong tick đó, không cần chờ hay ghi thêm sự kiện thả riêng.
+            Set<String> current = new HashSet<>();
             for (KeyBinding kb : client.options.allKeys) {
-                if (kb == null || isMovementKey(client, kb)) continue; // di chuyển đã ghi riêng bên dưới
-                if (kb.isPressed()) {
-                    pressed.add(kb.getTranslationKey());
-                }
+                if (kb != null && kb.isPressed()) current.add(kb.getTranslationKey());
             }
-
-            InputRecord record = new InputRecord(
-                client.options.forwardKey.isPressed(),
-                client.options.backKey.isPressed(),
-                client.options.leftKey.isPressed(),
-                client.options.rightKey.isPressed(),
-                client.options.jumpKey.isPressed(),
-                client.options.sneakKey.isPressed(),
-                pressed
-            );
-            recordedTicks.add(record);
+            tickData.add(current);
         }
         else if (state == State.PLAYING) {
-            if (playbackIndex >= recordedTicks.size()) {
+            if (playTick >= tickData.size()) {
                 if (loop) {
-                    playbackIndex = 0;
-                    prevPressedKeys = new HashSet<>();
+                    playTick = 0;
+                    prevPlayKeys = new HashSet<>();
                 } else {
                     state = State.IDLE;
                     resetPlayerInputs(client);
@@ -189,87 +184,53 @@ public class MacroManager {
                 }
             }
 
-            InputRecord record = recordedTicks.get(playbackIndex++);
-
-            // Set phím di chuyển (giữ liên tục theo trạng thái ghi được, không cần edge-trigger)
-            client.options.forwardKey.setPressed(record.pressingForward);
-            client.options.backKey.setPressed(record.pressingBack);
-            client.options.leftKey.setPressed(record.pressingLeft);
-            client.options.rightKey.setPressed(record.pressingRight);
-            client.options.jumpKey.setPressed(record.jumping);
-            client.options.sneakKey.setPressed(record.sneaking);
-
-            Set<String> currentKeys = new HashSet<>(record.pressedKeys);
+            Set<String> current = tickData.get(playTick);
 
             for (KeyBinding kb : client.options.allKeys) {
-                if (kb == null || isMovementKey(client, kb)) continue;
+                if (kb == null) continue;
                 String id = kb.getTranslationKey();
-                boolean shouldPress = currentKeys.contains(id);
-                boolean wasPressed = prevPressedKeys.contains(id);
+                boolean shouldPress = current.contains(id);
+                boolean wasPressed = prevPlayKeys.contains(id);
                 kb.setPressed(shouldPress);
                 if (shouldPress && !wasPressed) {
-                    // Chỉ bắn sự kiện "vừa bấm" đúng 1 lần tại cạnh lên, không lặp lại mỗi tick khi giữ.
-                    // Dùng phím ĐANG THỰC SỰ được gán (không phải phím mặc định) để macro vẫn đúng
-                    // dù người chơi đã đổi keybind trong Options.
+                    // Chỉ bắn sự kiện "vừa bấm" đúng lúc chuyển từ nhả sang nhấn, không lặp lại mỗi tick khi giữ.
+                    // Dùng phím ĐANG THỰC SỰ được gán (không phải phím mặc định), nên macro vẫn đúng dù
+                    // người chơi đã đổi keybind trong Options.
                     InputUtil.Key boundKey = InputUtil.fromTranslationKey(kb.getBoundKeyTranslationKey());
                     KeyBinding.onKeyPressed(boundKey);
                 }
             }
 
-            // Riêng tiến trình đào block (mining) cần cập nhật LIÊN TỤC theo trạng thái giữ/nhả
-            // thật sự mỗi tick (khác với sự kiện "vừa bấm" ở trên) để thanh đào chạy mượt, không bị kẹt.
-            boolean attackingNow = currentKeys.contains(client.options.attackKey.getTranslationKey());
+            // Tiến trình đào block (mining) cần cập nhật LIÊN TỤC mỗi tick theo trạng thái giữ thật,
+            // để thanh đào chạy mượt, không bị kẹt khi nhả chuột giữa chừng.
+            boolean attackingNow = current.contains(client.options.attackKey.getTranslationKey());
             if (client.interactionManager != null) {
                 ((MinecraftClientAccessor) client).invokeHandleBlockBreaking(attackingNow && client.crosshairTarget != null);
             }
 
-            prevPressedKeys = currentKeys;
+            prevPlayKeys = current;
+            playTick++;
         }
-    }
-
-    // Các phím di chuyển được ghi/phát riêng (trạng thái giữ liên tục), nên bỏ qua khi quét allKeys
-    // để tránh xử lý trùng lặp / gọi onKeyPressed sai chỗ cho nhóm phím này.
-    private boolean isMovementKey(MinecraftClient client, KeyBinding kb) {
-        return kb == client.options.forwardKey || kb == client.options.backKey
-            || kb == client.options.leftKey || kb == client.options.rightKey
-            || kb == client.options.jumpKey || kb == client.options.sneakKey;
     }
 
     private void resetPlayerInputs(MinecraftClient client) {
         if (client.options == null) return;
-        client.options.forwardKey.setPressed(false);
-        client.options.backKey.setPressed(false);
-        client.options.leftKey.setPressed(false);
-        client.options.rightKey.setPressed(false);
-        client.options.jumpKey.setPressed(false);
-        client.options.sneakKey.setPressed(false);
-
-        // Nhả TẤT CẢ các phím khác có thể đang bị macro giữ (attack, use, hotbar, drop, swapHands...)
         for (KeyBinding kb : client.options.allKeys) {
-            if (kb == null || isMovementKey(client, kb)) continue;
-            kb.setPressed(false);
+            if (kb != null) kb.setPressed(false);
         }
-
+        prevPlayKeys = new HashSet<>();
         if (client.interactionManager != null) {
             ((MinecraftClientAccessor) client).invokeHandleBlockBreaking(false);
         }
-        prevPressedKeys = new HashSet<>();
     }
 
     private boolean saveMacroToFile() {
         File file = macroDir.resolve(currentFileName + ".txt").toFile();
         try (BufferedWriter writer = new BufferedWriter(
                 new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8))) {
-            for (InputRecord r : recordedTicks) {
-                StringBuilder sb = new StringBuilder();
-                // Phần cố định: 6 cột di chuyển, ngăn cách với danh sách phím bằng dấu ';'
-                sb.append(String.format("%b,%b,%b,%b,%b,%b;",
-                    r.pressingForward, r.pressingBack, r.pressingLeft, r.pressingRight,
-                    r.jumping, r.sneaking));
-                // Phần động: tên các phím đang được giữ, ngăn cách bằng dấu ','
-                sb.append(String.join(",", r.pressedKeys));
-                sb.append("\n");
-                writer.write(sb.toString());
+            for (Set<String> tick : tickData) {
+                writer.write(String.join(",", tick));
+                writer.write("\n");
             }
             return true;
         } catch (IOException e) {
@@ -279,41 +240,25 @@ public class MacroManager {
     }
 
     private boolean loadMacroFromFile(File file) {
-        List<InputRecord> loaded = new ArrayList<>();
+        List<Set<String>> loaded = new ArrayList<>();
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                int sep = line.indexOf(';');
-                if (sep < 0) continue; // dòng sai định dạng (macro ghi bằng bản cũ true/false) -> bỏ qua
-
-                String movementPart = line.substring(0, sep);
-                String keysPart = line.substring(sep + 1);
-
-                String[] m = movementPart.split(",", -1);
-                if (m.length != 6) continue; // dòng sai định dạng -> bỏ qua, không làm hỏng toàn bộ macro
-
-                List<String> keys = new ArrayList<>();
-                if (!keysPart.isEmpty()) {
-                    for (String k : keysPart.split(",")) {
+                Set<String> keys = new HashSet<>();
+                if (!line.isEmpty()) {
+                    for (String k : line.split(",")) {
                         if (!k.isEmpty()) keys.add(k);
                     }
                 }
-
-                InputRecord r = new InputRecord(
-                    Boolean.parseBoolean(m[0]), Boolean.parseBoolean(m[1]),
-                    Boolean.parseBoolean(m[2]), Boolean.parseBoolean(m[3]),
-                    Boolean.parseBoolean(m[4]), Boolean.parseBoolean(m[5]),
-                    keys
-                );
-                loaded.add(r);
+                loaded.add(keys); // dòng trống -> tick không giữ phím nào, vẫn tính là 1 tick hợp lệ
             }
         } catch (IOException e) {
             e.printStackTrace();
             return false;
         }
-        recordedTicks.clear();
-        recordedTicks.addAll(loaded);
+        tickData.clear();
+        tickData.addAll(loaded);
         return true;
     }
 
