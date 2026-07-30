@@ -4,6 +4,7 @@ import com.example.tinytask.mixin.MinecraftClientAccessor;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
+import net.minecraft.client.util.InputUtil;
 import net.minecraft.text.Text;
 
 import java.io.*;
@@ -12,7 +13,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 public class MacroManager {
@@ -25,12 +28,16 @@ public class MacroManager {
     private final List<InputRecord> recordedTicks = new ArrayList<>();
     private int playbackIndex = 0;
     private boolean loop = false;
-    
+
+    // Tập hợp các phím (translation key) đang được coi là "đang giữ" ở tick TRƯỚC ĐÓ lúc phát lại.
+    // Dùng để chỉ bắn sự kiện "vừa bấm xuống" (rising edge) đúng 1 lần, không lặp lại mỗi tick khi giữ.
+    private Set<String> prevPressedKeys = new HashSet<>();
+
     private String currentFileName = "default";
     private final Path macroDir;
 
     public MacroManager() {
-        // Dùng thư mục config chuẩn của Fabric (an toàn hơn Paths.get("config",...) 
+        // Dùng thư mục config chuẩn của Fabric (an toàn hơn Paths.get("config",...)
         // vì không phụ thuộc vào working directory lúc chạy game)
         macroDir = FabricLoader.getInstance().getConfigDir().resolve("mctinytask");
         try {
@@ -104,6 +111,7 @@ public class MacroManager {
 
         this.loop = loopForever;
         this.playbackIndex = 0;
+        this.prevPressedKeys = new HashSet<>();
         this.state = State.PLAYING;
         sendMessage(client, "§a[TinyTask] Đang PHÁT file: " + fileName + (loopForever ? " (Chạy vô hạn)" : " (Chạy 1 lần)"));
     }
@@ -149,10 +157,12 @@ public class MacroManager {
         if (client.player == null || client.options == null) return;
 
         if (state == State.RECORDING) {
-            int hotbarCount = Math.min(InputRecord.HOTBAR_SLOTS, client.options.hotbarKeys.length);
-            boolean[] hotbar = new boolean[InputRecord.HOTBAR_SLOTS];
-            for (int i = 0; i < hotbarCount; i++) {
-                hotbar[i] = client.options.hotbarKeys[i].isPressed();
+            List<String> pressed = new ArrayList<>();
+            for (KeyBinding kb : client.options.allKeys) {
+                if (kb == null || isMovementKey(client, kb)) continue; // di chuyển đã ghi riêng bên dưới
+                if (kb.isPressed()) {
+                    pressed.add(kb.getTranslationKey());
+                }
             }
 
             InputRecord record = new InputRecord(
@@ -162,16 +172,15 @@ public class MacroManager {
                 client.options.rightKey.isPressed(),
                 client.options.jumpKey.isPressed(),
                 client.options.sneakKey.isPressed(),
-                client.options.attackKey.isPressed(),
-                client.options.useKey.isPressed(),
-                hotbar
+                pressed
             );
             recordedTicks.add(record);
-        } 
+        }
         else if (state == State.PLAYING) {
             if (playbackIndex >= recordedTicks.size()) {
                 if (loop) {
                     playbackIndex = 0;
+                    prevPressedKeys = new HashSet<>();
                 } else {
                     state = State.IDLE;
                     resetPlayerInputs(client);
@@ -182,7 +191,7 @@ public class MacroManager {
 
             InputRecord record = recordedTicks.get(playbackIndex++);
 
-            // Set phím di chuyển
+            // Set phím di chuyển (giữ liên tục theo trạng thái ghi được, không cần edge-trigger)
             client.options.forwardKey.setPressed(record.pressingForward);
             client.options.backKey.setPressed(record.pressingBack);
             client.options.leftKey.setPressed(record.pressingLeft);
@@ -190,33 +199,40 @@ public class MacroManager {
             client.options.jumpKey.setPressed(record.jumping);
             client.options.sneakKey.setPressed(record.sneaking);
 
-            // FIX CHUỘT TRÁI QUA ACCESSOR MIXIN
-            client.options.attackKey.setPressed(record.attacking);
-            if (record.attacking) {
-                KeyBinding.onKeyPressed(client.options.attackKey.getDefaultKey());
-            }
-            // Luôn báo trạng thái true/false cho từng tick, không chỉ khi true,
-            // nếu không thanh tiến trình đào block sẽ bị "kẹt" khi nhả chuột giữa chừng.
-            if (client.interactionManager != null) {
-                ((MinecraftClientAccessor) client).invokeHandleBlockBreaking(record.attacking && client.crosshairTarget != null);
-            }
+            Set<String> currentKeys = new HashSet<>(record.pressedKeys);
 
-            // FIX CHUỘT PHẢI
-            client.options.useKey.setPressed(record.usingItem);
-            if (record.usingItem) {
-                KeyBinding.onKeyPressed(client.options.useKey.getDefaultKey());
-            }
-
-            // FIX PHÍM SỐ 1..9 (chuyển ô hotbar)
-            int hotbarCount = Math.min(InputRecord.HOTBAR_SLOTS, client.options.hotbarKeys.length);
-            for (int i = 0; i < hotbarCount; i++) {
-                boolean pressed = record.hotbarKeys[i];
-                client.options.hotbarKeys[i].setPressed(pressed);
-                if (pressed) {
-                    KeyBinding.onKeyPressed(client.options.hotbarKeys[i].getDefaultKey());
+            for (KeyBinding kb : client.options.allKeys) {
+                if (kb == null || isMovementKey(client, kb)) continue;
+                String id = kb.getTranslationKey();
+                boolean shouldPress = currentKeys.contains(id);
+                boolean wasPressed = prevPressedKeys.contains(id);
+                kb.setPressed(shouldPress);
+                if (shouldPress && !wasPressed) {
+                    // Chỉ bắn sự kiện "vừa bấm" đúng 1 lần tại cạnh lên, không lặp lại mỗi tick khi giữ.
+                    // Dùng phím ĐANG THỰC SỰ được gán (không phải phím mặc định) để macro vẫn đúng
+                    // dù người chơi đã đổi keybind trong Options.
+                    InputUtil.Key boundKey = InputUtil.fromTranslationKey(kb.getBoundKeyTranslationKey());
+                    KeyBinding.onKeyPressed(boundKey);
                 }
             }
+
+            // Riêng tiến trình đào block (mining) cần cập nhật LIÊN TỤC theo trạng thái giữ/nhả
+            // thật sự mỗi tick (khác với sự kiện "vừa bấm" ở trên) để thanh đào chạy mượt, không bị kẹt.
+            boolean attackingNow = currentKeys.contains(client.options.attackKey.getTranslationKey());
+            if (client.interactionManager != null) {
+                ((MinecraftClientAccessor) client).invokeHandleBlockBreaking(attackingNow && client.crosshairTarget != null);
+            }
+
+            prevPressedKeys = currentKeys;
         }
+    }
+
+    // Các phím di chuyển được ghi/phát riêng (trạng thái giữ liên tục), nên bỏ qua khi quét allKeys
+    // để tránh xử lý trùng lặp / gọi onKeyPressed sai chỗ cho nhóm phím này.
+    private boolean isMovementKey(MinecraftClient client, KeyBinding kb) {
+        return kb == client.options.forwardKey || kb == client.options.backKey
+            || kb == client.options.leftKey || kb == client.options.rightKey
+            || kb == client.options.jumpKey || kb == client.options.sneakKey;
     }
 
     private void resetPlayerInputs(MinecraftClient client) {
@@ -227,15 +243,17 @@ public class MacroManager {
         client.options.rightKey.setPressed(false);
         client.options.jumpKey.setPressed(false);
         client.options.sneakKey.setPressed(false);
-        client.options.attackKey.setPressed(false);
-        client.options.useKey.setPressed(false);
+
+        // Nhả TẤT CẢ các phím khác có thể đang bị macro giữ (attack, use, hotbar, drop, swapHands...)
+        for (KeyBinding kb : client.options.allKeys) {
+            if (kb == null || isMovementKey(client, kb)) continue;
+            kb.setPressed(false);
+        }
+
         if (client.interactionManager != null) {
             ((MinecraftClientAccessor) client).invokeHandleBlockBreaking(false);
         }
-        int hotbarCount = Math.min(InputRecord.HOTBAR_SLOTS, client.options.hotbarKeys.length);
-        for (int i = 0; i < hotbarCount; i++) {
-            client.options.hotbarKeys[i].setPressed(false);
-        }
+        prevPressedKeys = new HashSet<>();
     }
 
     private boolean saveMacroToFile() {
@@ -244,12 +262,12 @@ public class MacroManager {
                 new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8))) {
             for (InputRecord r : recordedTicks) {
                 StringBuilder sb = new StringBuilder();
-                sb.append(String.format("%b,%b,%b,%b,%b,%b,%b,%b",
+                // Phần cố định: 6 cột di chuyển, ngăn cách với danh sách phím bằng dấu ';'
+                sb.append(String.format("%b,%b,%b,%b,%b,%b;",
                     r.pressingForward, r.pressingBack, r.pressingLeft, r.pressingRight,
-                    r.jumping, r.sneaking, r.attacking, r.usingItem));
-                for (int i = 0; i < InputRecord.HOTBAR_SLOTS; i++) {
-                    sb.append(",").append(r.hotbarKeys[i]);
-                }
+                    r.jumping, r.sneaking));
+                // Phần động: tên các phím đang được giữ, ngăn cách bằng dấu ','
+                sb.append(String.join(",", r.pressedKeys));
                 sb.append("\n");
                 writer.write(sb.toString());
             }
@@ -266,26 +284,29 @@ public class MacroManager {
                 new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                String[] parts = line.split(",");
-                int expected = 8 + InputRecord.HOTBAR_SLOTS;
-                if (parts.length == expected || parts.length == 8) {
-                    boolean[] hotbar = new boolean[InputRecord.HOTBAR_SLOTS];
-                    if (parts.length == expected) {
-                        for (int i = 0; i < InputRecord.HOTBAR_SLOTS; i++) {
-                            hotbar[i] = Boolean.parseBoolean(parts[8 + i]);
-                        }
-                    } // file macro cũ (8 cột) không có dữ liệu hotbar -> mặc định false
+                int sep = line.indexOf(';');
+                if (sep < 0) continue; // dòng sai định dạng (macro ghi bằng bản cũ true/false) -> bỏ qua
 
-                    InputRecord r = new InputRecord(
-                        Boolean.parseBoolean(parts[0]), Boolean.parseBoolean(parts[1]),
-                        Boolean.parseBoolean(parts[2]), Boolean.parseBoolean(parts[3]),
-                        Boolean.parseBoolean(parts[4]), Boolean.parseBoolean(parts[5]),
-                        Boolean.parseBoolean(parts[6]), Boolean.parseBoolean(parts[7]),
-                        hotbar
-                    );
-                    loaded.add(r);
+                String movementPart = line.substring(0, sep);
+                String keysPart = line.substring(sep + 1);
+
+                String[] m = movementPart.split(",", -1);
+                if (m.length != 6) continue; // dòng sai định dạng -> bỏ qua, không làm hỏng toàn bộ macro
+
+                List<String> keys = new ArrayList<>();
+                if (!keysPart.isEmpty()) {
+                    for (String k : keysPart.split(",")) {
+                        if (!k.isEmpty()) keys.add(k);
+                    }
                 }
-                // dòng sai định dạng: bỏ qua, không làm hỏng toàn bộ macro
+
+                InputRecord r = new InputRecord(
+                    Boolean.parseBoolean(m[0]), Boolean.parseBoolean(m[1]),
+                    Boolean.parseBoolean(m[2]), Boolean.parseBoolean(m[3]),
+                    Boolean.parseBoolean(m[4]), Boolean.parseBoolean(m[5]),
+                    keys
+                );
+                loaded.add(r);
             }
         } catch (IOException e) {
             e.printStackTrace();
