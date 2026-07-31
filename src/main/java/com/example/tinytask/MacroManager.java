@@ -11,7 +11,13 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 public class MacroManager {
@@ -21,19 +27,21 @@ public class MacroManager {
     private static final Pattern SAFE_FILENAME = Pattern.compile("^[a-zA-Z0-9_-]{1,64}$");
 
     private State state = State.IDLE;
+
+    // ====== GHI ======
+    // Danh sách tên phím theo ĐÚNG THỨ TỰ đã bấm, chỉ ghi lúc NHẤN XUỐNG, không ghi lúc nhả.
+    // Ví dụ: ["key.hotbar.1", "key.hotbar.2", "key.hotbar.3", "key.left.shift"]
+    private final List<String> keySequence = new ArrayList<>();
+    private Set<String> heldKeysWhileRecording = new HashSet<>(); // Để phát hiện đúng thời điểm "vừa nhấn xuống"
+
+    // ====== PHÁT ======
+    private int playbackIndex = 0;          // Đang phát tới phím thứ mấy trong keySequence
+    private KeyBinding lastPressedKey = null; // Phím vừa nhấn ở tick trước, để nhả ra trước khi bấm phím kế tiếp
+    private boolean loop = false;
+    private Map<String, KeyBinding> keyBindingLookup = new HashMap<>(); // Tra cứu nhanh KeyBinding theo tên
+
     private String currentFileName = "default";
     private final Path macroDir;
-
-    // Dữ liệu macro: mỗi phần tử là 1 TICK, chứa tên (translation key) các phím ĐANG được giữ ở tick đó.
-    // VD tick đó có W và phím "1" đang giữ -> {"key.forward", "key.hotbar.1"}.
-    // Không có nút nào giữ -> tập rỗng (ghi ra file là 1 dòng trống).
-    private final List<Set<String>> tickData = new ArrayList<>();
-
-    // ===== Trạng thái khi đang PHÁT =====
-    private int playTick = 0;
-    private boolean loop = false;
-    private Set<String> prevPlayKeys = new HashSet<>();
-    private Map<String, KeyBinding> keyBindingByName = new HashMap<>();
 
     public MacroManager() {
         // Dùng thư mục config chuẩn của Fabric (an toàn hơn Paths.get("config",...)
@@ -73,7 +81,8 @@ public class MacroManager {
             return;
         }
         this.currentFileName = fileName;
-        tickData.clear();
+        keySequence.clear();
+        heldKeysWhileRecording = new HashSet<>();
         state = State.RECORDING;
         sendMessage(client, "§a[TinyTask] Bắt đầu GHI vào file: " + fileName);
     }
@@ -103,23 +112,22 @@ public class MacroManager {
             sendMessage(client, "§c[TinyTask] Lỗi khi đọc file macro: " + fileName + ".txt");
             return;
         }
-        if (tickData.isEmpty()) {
-            sendMessage(client, "§e[TinyTask] File rỗng!");
+        if (keySequence.isEmpty()) {
+            sendMessage(client, "§e[TinyTask] File rỗng hoặc không đúng định dạng!");
             return;
         }
 
-        // Cache map tên phím -> KeyBinding một lần cho cả phiên phát
-        keyBindingByName = new HashMap<>();
+        // Tra cứu nhanh KeyBinding theo tên, dựng lại mỗi lần phát để luôn khớp với keybind hiện tại
+        keyBindingLookup = new HashMap<>();
         for (KeyBinding kb : client.options.allKeys) {
-            if (kb != null) keyBindingByName.put(kb.getTranslationKey(), kb);
+            if (kb != null) keyBindingLookup.put(kb.getTranslationKey(), kb);
         }
 
-        this.playTick = 0;
-        this.prevPlayKeys = new HashSet<>();
         this.loop = loopForever;
+        this.playbackIndex = 0;
+        this.lastPressedKey = null;
         this.state = State.PLAYING;
-        sendMessage(client, "§a[TinyTask] Đang PHÁT file: " + fileName + " (" + tickData.size() + " tick)"
-            + (loopForever ? " - Chạy vô hạn" : " - Chạy 1 lần"));
+        sendMessage(client, "§a[TinyTask] Đang PHÁT file: " + fileName + " (" + keySequence.size() + " phím)" + (loopForever ? " (Chạy vô hạn)" : " (Chạy 1 lần)"));
     }
 
     public void deleteMacroFile(MinecraftClient client, String fileName) {
@@ -146,7 +154,7 @@ public class MacroManager {
             boolean saved = saveMacroToFile();
             state = State.IDLE;
             if (saved) {
-                sendMessage(client, "§a[TinyTask] Đã DỪNG ghi và LƯU: " + currentFileName + ".txt (" + tickData.size() + " tick)");
+                sendMessage(client, "§a[TinyTask] Đã DỪNG ghi và LƯU: " + currentFileName + ".txt (" + keySequence.size() + " phím)");
             } else {
                 sendMessage(client, "§c[TinyTask] Đã DỪNG ghi nhưng LƯU FILE THẤT BẠI: " + currentFileName + ".txt");
             }
@@ -163,62 +171,72 @@ public class MacroManager {
         if (client.player == null || client.options == null) return;
 
         if (state == State.RECORDING) {
-            // Chụp lại TÊN của mọi phím đang giữ ở tick này - phím vừa nhấn sẽ xuất hiện NGAY LẬP TỨC
-            // trong tick đó, không cần chờ hay ghi thêm sự kiện thả riêng.
-            Set<String> current = new HashSet<>();
+            Set<String> heldNow = new HashSet<>();
             for (KeyBinding kb : client.options.allKeys) {
-                if (kb != null && kb.isPressed()) current.add(kb.getTranslationKey());
+                if (kb != null && kb.isPressed()) {
+                    heldNow.add(kb.getTranslationKey());
+                }
             }
-            tickData.add(current);
+
+            // Chỉ ghi lúc phím VỪA NHẤN XUỐNG (không có ở tick trước, có ở tick này).
+            // Không quan tâm lúc nhả ra -> file chỉ là 1 chuỗi tên phím theo đúng thứ tự đã bấm.
+            for (String key : heldNow) {
+                if (!heldKeysWhileRecording.contains(key)) {
+                    keySequence.add(key);
+                }
+            }
+
+            heldKeysWhileRecording = heldNow;
         }
         else if (state == State.PLAYING) {
-            if (playTick >= tickData.size()) {
-                if (loop) {
-                    playTick = 0;
-                    prevPlayKeys = new HashSet<>();
-                } else {
-                    state = State.IDLE;
-                    resetPlayerInputs(client);
-                    sendMessage(client, "§e[TinyTask] Hoàn tất phát lại macro.");
-                    return;
+            // Nhả phím đã bấm ở tick trước trước khi bấm phím kế tiếp,
+            // để mỗi phím chỉ là 1 cái "tap" (nhấn - nhả) rời rạc, giống đọc từng track trên đĩa CD.
+            if (lastPressedKey != null) {
+                boolean wasAttack = (lastPressedKey == client.options.attackKey);
+                lastPressedKey.setPressed(false);
+                lastPressedKey = null;
+                if (wasAttack && client.interactionManager != null) {
+                    ((MinecraftClientAccessor) client).invokeHandleBlockBreaking(false);
                 }
             }
 
-            Set<String> current = tickData.get(playTick);
-
-            for (KeyBinding kb : client.options.allKeys) {
-                if (kb == null) continue;
-                String id = kb.getTranslationKey();
-                boolean shouldPress = current.contains(id);
-                boolean wasPressed = prevPlayKeys.contains(id);
-                kb.setPressed(shouldPress);
-                if (shouldPress && !wasPressed) {
-                    // Chỉ bắn sự kiện "vừa bấm" đúng lúc chuyển từ nhả sang nhấn, không lặp lại mỗi tick khi giữ.
-                    // Dùng phím ĐANG THỰC SỰ được gán (không phải phím mặc định), nên macro vẫn đúng dù
-                    // người chơi đã đổi keybind trong Options.
+            if (playbackIndex < keySequence.size()) {
+                String keyName = keySequence.get(playbackIndex++);
+                KeyBinding kb = keyBindingLookup.get(keyName);
+                if (kb != null) {
+                    kb.setPressed(true);
+                    // Dùng phím ĐANG THỰC SỰ được gán (không phải phím mặc định) để macro vẫn đúng
+                    // dù người chơi đã đổi keybind trong Options.
                     InputUtil.Key boundKey = InputUtil.fromTranslationKey(kb.getBoundKeyTranslationKey());
                     KeyBinding.onKeyPressed(boundKey);
+                    lastPressedKey = kb;
+
+                    // Nếu phím vừa bấm là chuột trái -> kích hoạt luôn 1 nhịp đào block cho tick này
+                    if (kb == client.options.attackKey && client.interactionManager != null) {
+                        ((MinecraftClientAccessor) client).invokeHandleBlockBreaking(client.crosshairTarget != null);
+                    }
                 }
             }
 
-            // Tiến trình đào block (mining) cần cập nhật LIÊN TỤC mỗi tick theo trạng thái giữ thật,
-            // để thanh đào chạy mượt, không bị kẹt khi nhả chuột giữa chừng.
-            boolean attackingNow = current.contains(client.options.attackKey.getTranslationKey());
-            if (client.interactionManager != null) {
-                ((MinecraftClientAccessor) client).invokeHandleBlockBreaking(attackingNow && client.crosshairTarget != null);
+            if (playbackIndex >= keySequence.size()) {
+                if (loop) {
+                    playbackIndex = 0;
+                } else {
+                    state = State.IDLE;
+                    resetPlayerInputs(client); // nhả phím cuối cùng vừa bấm, tránh bị kẹt phím mãi mãi
+                    sendMessage(client, "§e[TinyTask] Hoàn tất phát lại macro.");
+                }
             }
-
-            prevPlayKeys = current;
-            playTick++;
         }
     }
 
     private void resetPlayerInputs(MinecraftClient client) {
         if (client.options == null) return;
+        // Nhả TẤT CẢ các phím có thể đang bị macro giữ
         for (KeyBinding kb : client.options.allKeys) {
             if (kb != null) kb.setPressed(false);
         }
-        prevPlayKeys = new HashSet<>();
+        lastPressedKey = null;
         if (client.interactionManager != null) {
             ((MinecraftClientAccessor) client).invokeHandleBlockBreaking(false);
         }
@@ -228,10 +246,9 @@ public class MacroManager {
         File file = macroDir.resolve(currentFileName + ".txt").toFile();
         try (BufferedWriter writer = new BufferedWriter(
                 new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8))) {
-            for (Set<String> tick : tickData) {
-                writer.write(String.join(",", tick));
-                writer.write("\n");
-            }
+            // File chỉ là 1 dòng duy nhất: các tên phím cách nhau bằng dấu phẩy, đúng thứ tự đã bấm.
+            // Ví dụ: key.hotbar.1,key.hotbar.2,key.hotbar.3,key.left.shift
+            writer.write(String.join(",", keySequence));
             return true;
         } catch (IOException e) {
             e.printStackTrace();
@@ -240,25 +257,24 @@ public class MacroManager {
     }
 
     private boolean loadMacroFromFile(File file) {
-        List<Set<String>> loaded = new ArrayList<>();
+        List<String> loaded = new ArrayList<>();
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
+            StringBuilder content = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) {
-                Set<String> keys = new HashSet<>();
-                if (!line.isEmpty()) {
-                    for (String k : line.split(",")) {
-                        if (!k.isEmpty()) keys.add(k);
-                    }
-                }
-                loaded.add(keys); // dòng trống -> tick không giữ phím nào, vẫn tính là 1 tick hợp lệ
+                content.append(line);
+            }
+            for (String key : content.toString().split(",")) {
+                String trimmed = key.trim();
+                if (!trimmed.isEmpty()) loaded.add(trimmed);
             }
         } catch (IOException e) {
             e.printStackTrace();
             return false;
         }
-        tickData.clear();
-        tickData.addAll(loaded);
+        keySequence.clear();
+        keySequence.addAll(loaded);
         return true;
     }
 
